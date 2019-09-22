@@ -48,8 +48,8 @@ def train_model(args, device, parallel):
     except (RuntimeError, TypeError):
         print('Warning: could not write graph to tensorboard, this might be a bug in tensorboardX')
     if parallel:
-        model.encoder = nn.DataParallel(model.encoder, device_ids=[0, 1])
-        model.decoder = nn.DataParallel(model.decoder, device_ids=[0, 1])
+        model.encoder = nn.DataParallel(model.encoder, device_ids=[int(a) for a in args['gpu'].split(',')])
+        model.decoder = nn.DataParallel(model.decoder, device_ids=[int(a) for a in args['gpu'].split(',')])
     model.to(device)
 
     # make optimizer
