@@ -6,8 +6,10 @@
 # Built-in
 import os
 import json
+import shutil
 import timeit
 import argparse
+import datetime
 
 # Libs
 import albumentations as A
@@ -46,15 +48,16 @@ def train_model(args, device, parallel):
     except RuntimeError or TypeError:
         print('Warning: could not write graph to tensorboard, this might be a bug in tensorboardX')
     if parallel:
-        model = nn.DataParallel(model, device_ids=[0, 1])
+        model.encoder = nn.DataParallel(model.encoder, device_ids=[0, 1])
+        model.decoder = nn.DataParallel(model.decoder, device_ids=[0, 1])
     model.to(device)
 
     # make optimizer
-    # FIXME set lr for encoder and decoder
-    '''train_params = [
+    train_params = [
         {'params': model.encoder.parameters(), 'lr': args['optimizer']['e_lr']},
-    ]'''
-    optm = optim.SGD(model.parameters(), lr=args['optimizer']['e_lr'], momentum=0.9, weight_decay=5e-4)
+        {'params': model.decoder.parameters(), 'lr': args['optimizer']['d_lr']}
+    ]
+    optm = optim.SGD(train_params, lr=args['optimizer']['e_lr'], momentum=0.9, weight_decay=5e-4)
     scheduler = optim.lr_scheduler.MultiStepLR(optm, milestones=eval(args['optimizer']['lr_drop_epoch']),
                                                gamma=args['optimizer']['lr_step'])
     angle_weights = torch.ones(args['task2_classes']).to(device)
@@ -123,6 +126,8 @@ def train_model(args, device, parallel):
 
 def main(flags):
     config = json.load(open(flags.config))
+    current_time = datetime.datetime.now()
+    config['trainer']['save_dir'] = os.path.join(config['trainer']['save_dir'], current_time.strftime('%Y%m%d_%H%M%S'))
 
     # set gpu
     device, parallel = misc_utils.set_gpu(config['gpu'])
@@ -130,6 +135,7 @@ def main(flags):
     misc_utils.set_random_seed(config['seed'])
     # make training directory
     misc_utils.make_dir_if_not_exist(config['trainer']['save_dir'])
+    shutil.copy(flags.config, config['trainer']['save_dir'])
 
     # train the model
     train_model(config, device, parallel)

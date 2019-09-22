@@ -184,31 +184,15 @@ class HourglassModuleMTL(nn.Module):
         return self._hour_glass_forward(self.depth, x)
 
 
-class StackHourglassNetMTL(nn.Module):
-    def __init__(
-        self,
-        task1_classes=2,
-        task2_classes=37,
-        backbone='resnet34',
-        block=BasicResnetBlock,
-        num_stacks=2,
-        hg_num_blocks=3,
-        depth=3,
-        pretrained=True
-    ):
-        super(StackHourglassNetMTL, self).__init__()
-        # settings
-        self.task1_classes = task1_classes
-        self.inplanes = 512
+class MTLDecoder(nn.Module):
+    def __init__(self, ch, num_stacks, num_feats, inplanes, task1_classes=2, task2_classes=37, block=BasicResnetBlock,
+                 hg_num_blocks=3, depth=3):
+        super(MTLDecoder, self).__init__()
         self.num_stacks = num_stacks
-        self.num_feats = 128
+        self.num_feats = num_feats
+        self.inplanes = inplanes
         self.relu = nn.ReLU(inplace=True)
-
-        # make encoder
-        self.encoder = encoders.models(backbone, pretrained, (2, 2, 1, 1, 1), False)
-
         # build hourglass modules
-        ch = self.encoder.chans[0]
         hg = []
         res_1, fc_1, score_1, _fc_1, _score_1 = [], [], [], [], []
         res_2, fc_2, score_2, _fc_2, _score_2 = [], [], [], [], []
@@ -265,40 +249,9 @@ class StackHourglassNetMTL(nn.Module):
         self.angle_finalrelu2 = nn.ReLU(inplace=True)
         self.angle_finalconv3 = nn.Conv2d(32, task2_classes, 2, padding=1)
 
-    def _make_residual(self, block, inplanes, planes, blocks, stride=1):
-        downsample = None
-        if stride != 1 or inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(
-                    inplanes,
-                    planes * block.expansion,
-                    kernel_size=1,
-                    stride=stride,
-                    bias=True,
-                )
-            )
-
-        layers = []
-        layers.append(block(inplanes, planes, stride, downsample=downsample))
-        inplanes = planes * block.expansion
-        for i in range(1, blocks):
-            layers.append(block(inplanes, planes))
-
-        return nn.Sequential(*layers)
-
-    def _make_fc(self, inplanes, outplanes):
-        bn = nn.BatchNorm2d(outplanes)
-        conv = nn.Conv2d(inplanes, outplanes, kernel_size=1, bias=True)
-        return nn.Sequential(conv, bn, self.relu)
-
-    def forward(self, x):
+    def forward(self, x, rows, cols):
         out_1 = []
         out_2 = []
-
-        rows = x.size(2)
-        cols = x.size(3)
-
-        x = self.encoder(x)
 
         for i in range(self.num_stacks):
             y1, y2 = self.hg[i](x)
@@ -344,6 +297,66 @@ class StackHourglassNetMTL(nn.Module):
         a_f5 = self.angle_finalconv3(a_f4)
         out_2.append(a_f5)
 
+        return out_1, out_2
+
+    def _make_residual(self, block, inplanes, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(
+                    inplanes,
+                    planes * block.expansion,
+                    kernel_size=1,
+                    stride=stride,
+                    bias=True,
+                )
+            )
+
+        layers = []
+        layers.append(block(inplanes, planes, stride, downsample=downsample))
+        inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(inplanes, planes))
+
+        return nn.Sequential(*layers)
+
+    def _make_fc(self, inplanes, outplanes):
+        bn = nn.BatchNorm2d(outplanes)
+        conv = nn.Conv2d(inplanes, outplanes, kernel_size=1, bias=True)
+        return nn.Sequential(conv, bn, self.relu)
+
+
+class StackHourglassNetMTL(nn.Module):
+    def __init__(
+        self,
+        task1_classes=2,
+        task2_classes=37,
+        backbone='resnet34',
+        block=BasicResnetBlock,
+        num_stacks=2,
+        hg_num_blocks=3,
+        depth=3,
+        pretrained=True
+    ):
+        super(StackHourglassNetMTL, self).__init__()
+        # settings
+        self.task1_classes = task1_classes
+        self.inplanes = 512
+        self.num_stacks = num_stacks
+        self.num_feats = 128
+
+        # make encoder
+        self.encoder = encoders.models(backbone, pretrained, (2, 2, 1, 1, 1), False)
+        ch = self.encoder.chans[0]
+        self.decoder = MTLDecoder(ch, self.num_stacks, self.num_feats, self.inplanes, task1_classes, task2_classes,
+                                  block, hg_num_blocks, depth)
+
+    def forward(self, x):
+        rows = x.size(2)
+        cols = x.size(3)
+
+        x = self.encoder(x)
+        out_1, out_2 = self.decoder(x, rows, cols)
         return out_1, out_2
 
     def step(self, data_loader, device, optm, phase, road_criterion, angle_criterion, save_image=True,
