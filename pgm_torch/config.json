@@ -1,0 +1,29 @@
+{
+  "seed": 1,
+  "gpu": 1,
+  "task1_classes": 2,
+  "task2_classes": 37,
+  "backbone": "resnet34",
+  "road_weight": 1,
+  "angle_weight": 1,
+  "dataset": {
+    "input_size": "(256, 256)",
+    "mean" : "(0.485, 0.456, 0.406)",
+    "std" : "(0.229, 0.224, 0.225)",
+    "data_dir": "/hdd/pgm/patches_mtl_nz/patches",
+    "train_file": "/hdd/pgm/patches_mtl_nz/file_list_train.txt",
+    "valid_file": "/hdd/pgm/patches_mtl_nz/file_list_valid.txt",
+    "batch_size": 1
+  },
+  "optimizer": {
+    "e_lr": 0.001,
+    "d_lr": 0.001,
+    "lr_step": 0.1,
+    "lr_drop_epoch": "[60,90,110]"
+  },
+  "trainer": {
+    "total_epochs": 120,
+    "save_epoch": 10,
+    "save_dir": "/hdd6/Models/line_mtl_cust"
+  }
+}

@@ -1,0 +1,132 @@
+"""
+
+"""
+
+
+# Built-in
+import os
+import json
+import timeit
+import argparse
+
+# Libs
+import albumentations as A
+from albumentations.pytorch import ToTensor
+from tensorboardX import SummaryWriter
+
+# PyTorch
+import torch
+from torch import optim
+from torch.utils.data import DataLoader
+
+# Own modules
+from data import loader
+from utils import misc_utils, metric_utils
+from network import StackMTLNet
+
+# Settings
+CONFIG_FILE = 'config.json'
+
+
+def read_flag():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', default=CONFIG_FILE, type=str, help='config file location')
+
+    flags = parser.parse_args()
+    return flags
+
+
+def train_model(args, device):
+    # TODO more options of network
+    model = StackMTLNet.StackHourglassNetMTL(args['task1_classes'], args['task2_classes'], args['backbone'])
+    log_dir = os.path.join(args['trainer']['save_dir'], 'log')
+    writer = SummaryWriter(log_dir=log_dir)
+    try:
+        writer.add_graph(model, torch.rand(1, 3, *eval(args['dataset']['input_size'])))
+    except RuntimeError:
+        print('Warning: could not write graph to tensorboard, this might be a bug in tensorboardX')
+
+    # make optimizer
+    # FIXME set lr for encoder and decoder
+    train_params = [
+        {'params': model.encoder.parameters(), 'lr': args['optimizer']['e_lr']},
+    ]
+    optm = optim.SGD(model.parameters(), lr=args['optimizer']['e_lr'], momentum=0.9, weight_decay=5e-4)
+    scheduler = optim.lr_scheduler.MultiStepLR(optm, milestones=eval(args['optimizer']['lr_drop_epoch']),
+                                               gamma=args['optimizer']['lr_step'])
+    angle_weights = torch.ones(args['task2_classes']).to(device)
+    road_weights = torch.ones(args['task1_classes']).to(device)
+    angle_loss = metric_utils.CrossEntropyLoss2d(weight=angle_weights).to(device)
+    road_loss = metric_utils.mIoULoss(weight=road_weights).to(device)
+
+    # TODO resume training
+
+    # prepare training
+    print('Total params: {:.2f}M'.format(sum(p.numel() for p in model.parameters()) / 1000000.0))
+    model.to(device)
+
+    # make data loader
+    mean = eval(args['dataset']['mean'])
+    std = eval(args['dataset']['std'])
+    tsfm_train = A.Compose([
+        A.Flip(),
+        A.RandomRotate90(),
+        A.Normalize(mean=mean, std=std),
+        ToTensor(sigmoid=False),
+    ])
+    tsfm_valid = A.Compose([
+        A.Normalize(mean=mean, std=std),
+        ToTensor(sigmoid=False),
+    ])
+    train_loader = DataLoader(loader.TransmissionDataLoader(args['dataset']['data_dir'],
+                                                            args['dataset']['train_file'], transforms=tsfm_train),
+                              batch_size=args['dataset']['batch_size'], shuffle=True, num_workers=4)
+    valid_loader = DataLoader(loader.TransmissionDataLoader(args['dataset']['data_dir'],
+                                                            args['dataset']['valid_file'], transforms=tsfm_valid),
+                              batch_size=args['dataset']['batch_size'], shuffle=False, num_workers=4)
+    print('Start training model')
+    train_val_loaders = {'train': train_loader, 'valid': valid_loader}
+
+    # train the model
+    for epoch in range(args['trainer']['total_epochs']):
+        for phase in ['train', 'valid']:
+            start_time = timeit.default_timer()
+            if phase == 'train':
+                scheduler.step()
+                model.train()
+            else:
+                model.eval()
+
+            loss_dict = model.step(train_val_loaders[phase], device, optm, phase, road_loss, angle_loss,
+                                   True, mean, std)
+            misc_utils.write_and_print(writer, phase, epoch, args['trainer']['total_epochs'], loss_dict, start_time)
+
+        # save the model
+        if epoch % args['trainer']['save_epoch'] == (args['trainer']['save_epoch'] - 1):
+            save_name = os.path.join(args['trainer']['save_dir'], 'epoch-{}.pth.tar'.format(epoch))
+            torch.save({
+                'epoch': epoch + 1,
+                'state_dict': model.state_dict(),
+                'opt_dict': optm.state_dict(),
+                'loss': loss_dict,
+            }, save_name)
+            print('Saved model at {}'.format(save_name))
+    writer.close()
+
+
+def main(flags):
+    config = json.load(open(flags.config))
+
+    # set gpu
+    device, _ = misc_utils.set_gpu(config['gpu'])
+    # set random seed
+    misc_utils.set_random_seed(config['seed'])
+    # make training directory
+    misc_utils.make_dir_if_not_exist(config['trainer']['save_dir'])
+
+    # train the model
+    train_model(config, device)
+
+
+if __name__ == '__main__':
+    main(read_flag())
