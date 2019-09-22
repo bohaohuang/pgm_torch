@@ -16,7 +16,7 @@ from tensorboardX import SummaryWriter
 
 # PyTorch
 import torch
-from torch import optim
+from torch import nn, optim
 from torch.utils.data import DataLoader
 
 # Own modules
@@ -36,21 +36,24 @@ def read_flag():
     return flags
 
 
-def train_model(args, device):
+def train_model(args, device, parallel):
     # TODO more options of network
     model = StackMTLNet.StackHourglassNetMTL(args['task1_classes'], args['task2_classes'], args['backbone'])
     log_dir = os.path.join(args['trainer']['save_dir'], 'log')
     writer = SummaryWriter(log_dir=log_dir)
     try:
         writer.add_graph(model, torch.rand(1, 3, *eval(args['dataset']['input_size'])))
-    except RuntimeError:
+    except RuntimeError or TypeError:
         print('Warning: could not write graph to tensorboard, this might be a bug in tensorboardX')
+    if parallel:
+        model = nn.DataParallel(model, device_ids=[0, 1])
+    model.to(device)
 
     # make optimizer
     # FIXME set lr for encoder and decoder
-    train_params = [
+    '''train_params = [
         {'params': model.encoder.parameters(), 'lr': args['optimizer']['e_lr']},
-    ]
+    ]'''
     optm = optim.SGD(model.parameters(), lr=args['optimizer']['e_lr'], momentum=0.9, weight_decay=5e-4)
     scheduler = optim.lr_scheduler.MultiStepLR(optm, milestones=eval(args['optimizer']['lr_drop_epoch']),
                                                gamma=args['optimizer']['lr_step'])
@@ -63,7 +66,6 @@ def train_model(args, device):
 
     # prepare training
     print('Total params: {:.2f}M'.format(sum(p.numel() for p in model.parameters()) / 1000000.0))
-    model.to(device)
 
     # make data loader
     mean = eval(args['dataset']['mean'])
@@ -97,8 +99,13 @@ def train_model(args, device):
             else:
                 model.eval()
 
-            loss_dict = model.step(train_val_loaders[phase], device, optm, phase, road_loss, angle_loss,
-                                   True, mean, std)
+            try:
+                loss_dict = model.step(train_val_loaders[phase], device, optm, phase, road_loss, angle_loss,
+                                       True, mean, std)
+            # TODO elegant way to deal with this
+            except AttributeError:
+                loss_dict = model.module.step(train_val_loaders[phase], device, optm, phase, road_loss, angle_loss,
+                                              True, mean, std)
             misc_utils.write_and_print(writer, phase, epoch, args['trainer']['total_epochs'], loss_dict, start_time)
 
         # save the model
@@ -118,14 +125,14 @@ def main(flags):
     config = json.load(open(flags.config))
 
     # set gpu
-    device, _ = misc_utils.set_gpu(config['gpu'])
+    device, parallel = misc_utils.set_gpu(config['gpu'])
     # set random seed
     misc_utils.set_random_seed(config['seed'])
     # make training directory
     misc_utils.make_dir_if_not_exist(config['trainer']['save_dir'])
 
     # train the model
-    train_model(config, device)
+    train_model(config, device, parallel)
 
 
 if __name__ == '__main__':
