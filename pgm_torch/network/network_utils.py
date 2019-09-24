@@ -6,10 +6,11 @@ This file defines commonly used functions for using networks
 import os
 import copy
 import timeit
-
+from glob import glob
 
 # Libs
 import numpy as np
+from natsort import natsorted
 
 # PyTorch
 import torch
@@ -17,8 +18,9 @@ import torchvision
 from torch import nn
 from torchsummary import summary
 
-
 # Own modules
+from utils import misc_utils, metric_utils
+from data import data_utils, patch_extractor
 
 
 def write_and_print(writer, phase, current_epoch, total_epoch, loss_dict, s_time):
@@ -103,7 +105,7 @@ def sequential_load(target, source_state):
     return new_dict
 
 
-def flex_load(model_dict, ckpt_dict, relax_load=False):
+def flex_load(model_dict, ckpt_dict, relax_load=False, disable_parallel=False):
     # try to load model with relaxed naming restriction
     ckpt_params = [a for a in ckpt_dict.keys()]
     self_params = [a for a in model_dict.keys()]
@@ -128,18 +130,26 @@ def flex_load(model_dict, ckpt_dict, relax_load=False):
     for mp in model_params:
         print('\t', mp)
 
-    if not relax_load:
+    if not relax_load and not disable_parallel:
         pretrained_state = {k: v for k, v in ckpt_dict.items() if k in model_dict and
                             v.size() == model_dict[k].size()}
-        if len(pretrained_state) == 0 and not relax_load:
+        if len(pretrained_state) == 0:
             raise ValueError('No parameter matches in the current model in pretrained model, please check '
                              'the model definition or enable relax_load')
         print('Try loading without those parameters')
         return pretrained_state
+    elif disable_parallel:
+        pretrained_state = {k: v for k, v in ckpt_dict.items() if k.replace('module.', '') in model_dict and
+                            v.size() == model_dict[k.replace('module.', '')].size()}
+        if len(pretrained_state) == 0:
+            raise ValueError('No parameter matches in the current model in pretrained model, please check '
+                             'the model definition or enable relax_load')
+        print('Try loading without those parameters')
+        print('{:.2f}% of the model loaded from the pretrained'.format(len(pretrained_state) / len(self_params) * 100))
+        return pretrained_state
     else:
         print('Try loading with relaxed naming rule:')
         pretrained_state = {}
-
         # find one match string
         prefix = ''
         for self_name in self_params:
@@ -165,7 +175,7 @@ def flex_load(model_dict, ckpt_dict, relax_load=False):
         return pretrained_state
 
 
-def load(model, model_path, relax_load=False):
+def load(model, model_path, relax_load=False, disable_parallel=False):
     """
     Load the weights in the pretrained model directory, the order of loading method is as follows:
     1. Try load the exact name of tensors in the pretrained model file, if not all names are the same, try 2;
@@ -181,5 +191,95 @@ def load(model, model_path, relax_load=False):
     try:
         model.load_state_dict(checkpoint['state_dict'])
     except RuntimeError:
-        pretrained_state = flex_load(model.state_dict(), checkpoint['state_dict'], relax_load)
+        pretrained_state = flex_load(model.state_dict(), checkpoint['state_dict'], relax_load, disable_parallel)
         model.load_state_dict(pretrained_state, strict=False)
+
+
+def change_channel_order(data, to_channel_last=True):
+    """
+    Switch the image type from channel first to channel last
+    :param data: the data to switch the channels
+    :param to_channel_last: if True, switch the first channel to the last
+    :return: the channel switched data
+    """
+    if to_channel_last:
+        if len(data.shape) == 3:
+            return np.rollaxis(data, 0, 3)
+        else:
+            return np.rollaxis(data, 1, 4)
+    else:
+        if len(data.shape) == 3:
+            return np.rollaxis(data, 2, 0)
+        else:
+            return np.rollaxis(data, 3, 1)
+
+
+class Evaluator:
+    def __init__(self, ds_name, tsfm, device):
+        self.tsfm = tsfm
+        self.device = device
+        if ds_name == 'transmission':
+            self.image_dir = r'~/Documents/bohao/data/transmission_line/raw2'
+            gt_dir = r'/media/ei-edl01/data/remote_sensing_data/transmission_line/parsed_annotation'
+            self.lbl_files = natsorted(glob(os.path.join(gt_dir, '*.csv')))
+
+    def evaluate(self, model, patch_size, overlap, pred_dir=None, report_dir=None, save_conf=False):
+        iou_a, iou_b = 0, 0
+        report = []
+        if pred_dir:
+            misc_utils.make_dir_if_not_exist(pred_dir)
+        for lbl_file in self.lbl_files:
+            # only do NZ image
+            if 'NZ' not in lbl_file:
+                continue
+
+            # parse ground truth
+            file_name = os.path.splitext(os.path.basename(lbl_file))[0]
+            boxes, lines = data_utils.csv_to_annotation(lbl_file)
+            tile_id = int(''.join([a for a in file_name if a.isdigit()]))
+
+            if tile_id > 3:
+                continue
+
+            # read rgb image
+            rgb_file = os.path.join(self.image_dir, '{}.tif'.format(file_name))
+            rgb = misc_utils.load_file(rgb_file)[..., :3]
+            # make line map
+            lbl, _ = data_utils.render_line_graph(rgb.shape[:2], boxes, lines)
+
+            # evaluate on tiles
+            tile_dim = rgb.shape[:2]
+            grid_list = patch_extractor.make_grid(tile_dim, patch_size, overlap)
+            tile_preds = []
+            for patch in patch_extractor.patch_block(rgb, 0, grid_list, patch_size, False):
+                for tsfm in self.tsfm:
+                    tsfm_image = tsfm(image=patch)
+                    patch = tsfm_image['image']
+                patch = torch.unsqueeze(patch, 0).to(self.device)
+                pred = model.inference(patch).detach().cpu().numpy()
+                tile_preds.append(change_channel_order(pred, True)[0, :, :, :])
+            # stitch back to tiles
+            tile_preds = patch_extractor.unpatch_block(
+                np.array(tile_preds),
+                tile_dim,
+                patch_size,
+                tile_dim,
+                patch_size,
+                overlap=0
+            )
+            if save_conf:
+                misc_utils.save_file(os.path.join(pred_dir, '{}.npy'.format(file_name)), tile_preds)
+            tile_preds = np.argmax(tile_preds, -1)
+            a, b = metric_utils.iou_metric(lbl, tile_preds)
+            file_name = os.path.splitext(os.path.basename(lbl_file))[0]
+            print('{}: IoU={:.2f}'.format(file_name, a/b*100))
+            report.append('{},{},{},{}\n'.format(file_name, a, b, a/b*100))
+            iou_a += a
+            iou_b += b
+            if pred_dir:
+                misc_utils.save_file(os.path.join(pred_dir, '{}.png'.format(file_name)), tile_preds)
+        print('Overall: IoU={:.2f}'.format(iou_a/iou_b*100))
+        report.append('Overall,{},{},{}\n'.format(iou_a, iou_b, iou_a/iou_b*100))
+        if report_dir:
+            misc_utils.make_dir_if_not_exist(report_dir)
+            misc_utils.save_file(os.path.join(report_dir, 'result.txt'), report)

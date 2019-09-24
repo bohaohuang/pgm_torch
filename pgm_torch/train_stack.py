@@ -61,9 +61,10 @@ def train_model(args, device, parallel):
     scheduler = optim.lr_scheduler.MultiStepLR(optm, milestones=eval(args['optimizer']['lr_drop_epoch']),
                                                gamma=args['optimizer']['lr_step'])
     angle_weights = torch.ones(args['task2_classes']).to(device)
-    road_weights = torch.ones(args['task1_classes']).to(device)
+    road_weights = torch.tensor([1-args['task1_classes'], args['task1_classes']], dtype=torch.float).to(device)
     angle_loss = metric_utils.CrossEntropyLoss2d(weight=angle_weights).to(device)
     road_loss = metric_utils.mIoULoss(weight=road_weights).to(device)
+    iou_loss = metric_utils.IoU().to(device)
 
     # TODO resume training
 
@@ -97,18 +98,13 @@ def train_model(args, device, parallel):
         for phase in ['train', 'valid']:
             start_time = timeit.default_timer()
             if phase == 'train':
-                scheduler.step()
                 model.train()
+                scheduler.step()
             else:
                 model.eval()
 
-            try:
-                loss_dict = model.step(train_val_loaders[phase], device, optm, phase, road_loss, angle_loss,
-                                       True, mean, std)
-            # TODO elegant way to deal with this
-            except AttributeError:
-                loss_dict = model.module.step(train_val_loaders[phase], device, optm, phase, road_loss, angle_loss,
-                                              True, mean, std)
+            loss_dict = model.step(train_val_loaders[phase], device, optm, phase, road_loss, angle_loss, iou_loss,
+                                   True, mean, std)
             misc_utils.write_and_print(writer, phase, epoch, args['trainer']['total_epochs'], loss_dict, start_time)
 
         # save the model

@@ -359,7 +359,15 @@ class StackHourglassNetMTL(nn.Module):
         out_1, out_2 = self.decoder(x, rows, cols)
         return out_1, out_2
 
-    def step(self, data_loader, device, optm, phase, road_criterion, angle_criterion, save_image=True,
+    def inference(self, x):
+        rows = x.size(2)
+        cols = x.size(3)
+
+        x = self.encoder(x)
+        out_1, out_2 = self.decoder(x, rows, cols)
+        return out_1[-1]
+
+    def step(self, data_loader, device, optm, phase, road_criterion, angle_criterion, iou_criterion, save_image=True,
              mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)):
         loss_dict = {}
         num_stacks = self.num_stacks
@@ -392,6 +400,9 @@ class StackHourglassNetMTL(nn.Module):
             loss1 += road_criterion(pred_lbl[-1], label, False)
             loss2 += angle_criterion(pred_ang[-2], angle_2)
             loss2 += angle_criterion(pred_ang[-1], angle)
+            # IoU loss
+            loss3 = iou_criterion(pred_lbl[-1], label)
+            iou_criterion.update(loss3, image.size(0))
 
             pred_lbl, pred_ang = pred_lbl[-1], pred_ang[-1]
 
@@ -409,8 +420,10 @@ class StackHourglassNetMTL(nn.Module):
                 loss_dict['image'] = torch.from_numpy(banner)
         loss_dict[road_criterion.name] = road_criterion.get_loss()
         loss_dict[angle_criterion.name] = angle_criterion.get_loss()
+        loss_dict[iou_criterion.name] = iou_criterion.get_loss()
         road_criterion.reset()
         angle_criterion.reset()
+        iou_criterion.reset()
 
         return loss_dict
 
@@ -419,4 +432,5 @@ if __name__ == '__main__':
     model = StackHourglassNetMTL()
     import torch
     x = torch.randn((1, 3, 512, 512))
-    model(x)
+    y = model.inference(x)
+    print(y.shape)

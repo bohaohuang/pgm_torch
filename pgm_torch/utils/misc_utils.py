@@ -9,12 +9,12 @@ from functools import wraps
 # Libs
 import torch
 import torchvision
+import imageio
 import scipy.signal
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from PIL import Image
-from skimage import io
 from torchsummary import summary
 
 # Own modules
@@ -101,7 +101,7 @@ def load_file(file_name, **kwargs):
         elif 'pil' in kwargs and kwargs['pil']:
             data = Image.open(file_name)
         else:
-            data = io.imread(file_name)
+            data = imageio.imread(file_name)
 
         return data
     except Exception:  # so many things could go wrong, can't be more specific.

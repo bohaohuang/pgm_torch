@@ -6,6 +6,7 @@
 # Built-in
 
 # Libs
+import numpy as np
 
 # Pytorch
 import torch
@@ -74,7 +75,7 @@ class CrossEntropyLoss2d(LossClass):
 
     def __init__(self, weight=None, size_average=True, ignore_index=255, reduce=True):
         super(CrossEntropyLoss2d, self).__init__()
-        self.name = 'Angle'
+        self.name = 'Road'
         self.nll_loss = nn.NLLLoss(weight, size_average, ignore_index, reduce)
 
     def forward(self, inputs, targets):
@@ -86,7 +87,7 @@ class CrossEntropyLoss2d(LossClass):
 class mIoULoss(LossClass):
     def __init__(self, weight=None, n_classes=2):
         super(mIoULoss, self).__init__()
-        self.name = 'Road'
+        self.name = 'Segmentation'
         self.classes = n_classes
         self.weights = Variable(weight * weight)
 
@@ -118,3 +119,49 @@ class mIoULoss(LossClass):
 
         ## Return average loss over classes and batch
         return -torch.mean(loss)
+
+
+class IoU(LossClass):
+    """
+    IoU metric that is not differentiable in training
+    """
+    def __init__(self):
+        super(IoU, self).__init__()
+        self.name = 'IoU'
+        self.numerator = 0
+        self.denominator = 0
+
+    def forward(self, pred, lbl):
+        truth = lbl.flatten().float()
+        _, pred = torch.max(pred[:, :, :, :], 1)
+        pred = pred.flatten().float()
+        intersect = truth * pred
+        return torch.sum(intersect == 1), torch.sum(truth + pred >= 1)
+
+    def update(self, loss, size):
+        self.numerator += loss[0].item() * size
+        self.denominator += loss[1].item() * size
+
+    def reset(self):
+        self.numerator = 0
+        self.denominator = 0
+
+    def get_loss(self):
+        return self.numerator / self.denominator
+
+
+def iou_metric(truth, pred, divide=False):
+    """
+    Compute IoU, i.e., jaccard index
+    :param truth: truth data matrix, should be H*W
+    :param pred: prediction data matrix, should be the same dimension as the truth data matrix
+    :param divide: if True, will return the IoU, otherwise return the numerator and denominator
+    :return:
+    """
+    truth = truth.flatten()
+    pred = pred.flatten()
+    intersect = truth*pred
+    if not divide:
+        return float(np.sum(intersect == 1)), float(np.sum(truth+pred >= 1))
+    else:
+        return float(np.sum(intersect == 1) / np.sum(truth+pred >= 1))
