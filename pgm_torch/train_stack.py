@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader
 # Own modules
 from data import loader
 from utils import misc_utils, metric_utils
-from network import StackMTLNet
+from network import StackMTLNet, network_utils
 
 # Settings
 CONFIG_FILE = 'config.json'
@@ -50,6 +50,14 @@ def train_model(args, device, parallel):
     if parallel:
         model.encoder = nn.DataParallel(model.encoder, device_ids=[a for a in range(len(args['gpu'].split(',')))])
         model.decoder = nn.DataParallel(model.decoder, device_ids=[a for a in range(len(args['gpu'].split(',')))])
+
+    start_epoch = 0
+    if args['resume_dir'] != 'None':
+        print('Resume training from {}'.format(args['resume_dir']))
+        ckpt = torch.load(args['resume_dir'])
+        start_epoch = ckpt['epoch']
+        network_utils.load(model, args['resume_dir'], disable_parallel=True)
+
     model.to(device)
 
     # make optimizer
@@ -65,8 +73,6 @@ def train_model(args, device, parallel):
     angle_loss = metric_utils.CrossEntropyLoss2d(weight=angle_weights).to(device)
     road_loss = metric_utils.mIoULoss(weight=road_weights).to(device)
     iou_loss = metric_utils.IoU().to(device)
-
-    # TODO resume training
 
     # prepare training
     print('Total params: {:.2f}M'.format(sum(p.numel() for p in model.parameters()) / 1000000.0))
@@ -86,15 +92,17 @@ def train_model(args, device, parallel):
     ])
     train_loader = DataLoader(loader.TransmissionDataLoader(args['dataset']['data_dir'],
                                                             args['dataset']['train_file'], transforms=tsfm_train),
-                              batch_size=args['dataset']['batch_size'], shuffle=True, num_workers=4)
+                              batch_size=args['dataset']['batch_size'], shuffle=True,
+                              num_workers=args['dataset']['workers'])
     valid_loader = DataLoader(loader.TransmissionDataLoader(args['dataset']['data_dir'],
                                                             args['dataset']['valid_file'], transforms=tsfm_valid),
-                              batch_size=args['dataset']['batch_size'], shuffle=False, num_workers=4)
+                              batch_size=args['dataset']['batch_size'], shuffle=False,
+                              num_workers=args['dataset']['workers'])
     print('Start training model')
     train_val_loaders = {'train': train_loader, 'valid': valid_loader}
 
     # train the model
-    for epoch in range(args['trainer']['total_epochs']):
+    for epoch in range(start_epoch, args['trainer']['total_epochs']):
         for phase in ['train', 'valid']:
             start_time = timeit.default_timer()
             if phase == 'train':

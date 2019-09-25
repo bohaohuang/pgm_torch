@@ -20,8 +20,8 @@ from utils import misc_utils
 from network import StackMTLNet, network_utils
 
 # Settings
-MODEL_DIR = r'/hdd6/Models/line_mtl_exp/20190922_141124'
-EPOCH_NUM = 59
+MODEL_DIR = r'/hdd6/Models/line_mtl_exp/20190924_154508'
+EPOCH_NUM = 99
 GPU = '1'
 
 
@@ -80,5 +80,5 @@ def compare_results():
 
 
 if __name__ == '__main__':
-    # main()
-    compare_results()
+    main()
+    # compare_results()
