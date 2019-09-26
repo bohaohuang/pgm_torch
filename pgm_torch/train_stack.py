@@ -57,6 +57,9 @@ def train_model(args, device, parallel):
         ckpt = torch.load(args['resume_dir'])
         start_epoch = ckpt['epoch']
         network_utils.load(model, args['resume_dir'], disable_parallel=True)
+    elif args['finetune_dir'] != 'None':
+        print('Finetune model from {}'.format(args['finetune_dir']))
+        network_utils.load(model, args['finetune_dir'], disable_parallel=True)
 
     model.to(device)
 
