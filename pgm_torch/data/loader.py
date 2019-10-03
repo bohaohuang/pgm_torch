@@ -60,7 +60,7 @@ class TransmissionDataLoader(data.Dataset):
 
 if __name__ == '__main__':
     import albumentations as A
-    from albumentations.pytorch import ToTensor
+    from albumentations.pytorch import ToTensorV2
 
 
     def visualize(rgb, gt, vec, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.255)):
@@ -120,9 +120,9 @@ if __name__ == '__main__':
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225],
         ),
-        ToTensor(sigmoid=False),
+        ToTensorV2(),
     ])
-    ds = TransmissionDataLoader(r'/hdd/pgm/patches_mtl/patches', r'/hdd/pgm/patches_mtl/file_list_valid.txt', transforms=tsfm)
+    ds = TransmissionDataLoader(r'/hdd/pgm/nz_mtl_ps512_ol0/patches', r'/hdd/pgm/nz_mtl_ps512_ol0/file_list_valid.txt', transforms=tsfm)
     for cnt, (rgb, gt, vec) in enumerate(ds):
         visualize(rgb, gt, vec)
 

@@ -13,7 +13,7 @@ import datetime
 
 # Libs
 import albumentations as A
-from albumentations.pytorch import ToTensor
+from albumentations.pytorch import ToTensorV2
 from tensorboardX import SummaryWriter
 
 # PyTorch
@@ -87,11 +87,11 @@ def train_model(args, device, parallel):
         A.Flip(),
         A.RandomRotate90(),
         A.Normalize(mean=mean, std=std),
-        ToTensor(sigmoid=False),
+        ToTensorV2(),
     ])
     tsfm_valid = A.Compose([
         A.Normalize(mean=mean, std=std),
-        ToTensor(sigmoid=False),
+        ToTensorV2(),
     ])
     train_loader = DataLoader(loader.TransmissionDataLoader(args['dataset']['data_dir'],
                                                             args['dataset']['train_file'], transforms=tsfm_train),
